@@ -4,3 +4,7 @@ __pycache__/
 outputs/
 data/raw/
 .pytest_cache/
+
+.venv/
+data/processed/
+data/sample/

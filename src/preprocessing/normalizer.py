@@ -5,6 +5,11 @@ canonical schema: ISO-8601 UTC timestamps, a 5-level severity scale,
 cleaned host/service names, and extracted entities (IPs, status codes,
 latency, error codes) that later phases (evidence builder, LLM integration)
 can read directly instead of re-parsing message strings.
+
+Raw vs normalized: normalization NEVER overwrites the original data.
+`raw_message` (the exact line), `message` (as parsed), `timestamp_raw` and
+`severity_raw` are left untouched; normalized values go into
+`normalized_message`, `timestamp_iso` and `severity`.
 """
 
 from __future__ import annotations
@@ -30,13 +35,33 @@ _ERRCODE_RE = re.compile(r"\b(ERR|ERROR)[_\-]?(\d{2,5})\b", re.IGNORECASE)
 _EMBEDDED_PREFIX_RE = re.compile(r"^[\w\-.]+\[\d+\]:\s*")
 
 
+# Timestamps that carry no year ("Sep 20 08:01:03"): the year is assumed.
+_YEARLESS_RE = re.compile(r"^[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}$")
+# LogHub HDFS compact form: "yymmdd HHMMSS" (e.g. "081109 203615").
+_COMPACT_YMD_HMS_RE = re.compile(r"^(\d{2})(\d{2})(\d{2})\s+(\d{2})(\d{2})(\d{2})$")
+
+
+def timestamp_year_is_assumed(ts_raw: Optional[str]) -> bool:
+    return bool(ts_raw and _YEARLESS_RE.match(ts_raw.strip()))
+
+
 def normalize_timestamp(ts_raw: Optional[str], reference_year: int = 2026) -> Optional[str]:
     """Parses a variety of timestamp formats into ISO-8601 UTC. Syslog
     timestamps ('Sep 20 08:01:03') have no year, so a reference year is
-    injected — swap this for file mtime or a known collection window in
-    production."""
+    injected (normalize_event flags this in metadata) — swap this for file
+    mtime or a known collection window in production. Timestamps without a
+    timezone are assumed to be UTC."""
     if not ts_raw:
         return None
+
+    ts_raw = ts_raw.strip()
+    compact = _COMPACT_YMD_HMS_RE.match(ts_raw)
+    if compact:
+        yy, mo, dd, hh, mi, ss = (int(g) for g in compact.groups())
+        try:
+            return datetime(2000 + yy, mo, dd, hh, mi, ss, tzinfo=timezone.utc).isoformat()
+        except ValueError:
+            return None
 
     candidate = ts_raw
     m = re.match(r"^(\d{1,2}/\w{3}/\d{4}):(\d{2}:\d{2}:\d{2}\s*[+-]\d{4})$", ts_raw)
@@ -88,12 +113,18 @@ def extract_entities(message: str) -> dict:
 
 
 def normalize_event(event: LogEvent) -> LogEvent:
+    """Fills the normalized fields. `raw_message`, `message`, `timestamp_raw`
+    and `severity_raw` are never modified."""
     event.timestamp_iso = normalize_timestamp(event.timestamp_raw)
+    if timestamp_year_is_assumed(event.timestamp_raw):
+        event.metadata["timestamp_year_assumed"] = True
+    if event.severity_raw is None and event.severity not in (None, Severity.UNKNOWN.value):
+        event.severity_raw = event.severity
     event.severity = normalize_severity(event.severity)
     event.host = normalize_host(event.host)
     event.service = normalize_service(event.service)
-    event.message = strip_embedded_prefix(event.message)
-    event.entities = extract_entities(event.message)
+    event.normalized_message = strip_embedded_prefix(event.message)
+    event.entities = extract_entities(event.normalized_message)
     return event
 
 
