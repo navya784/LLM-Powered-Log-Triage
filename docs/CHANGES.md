@@ -24,3 +24,13 @@
 Deviations / additions worth knowing about: outputs go to `data/processed/<dataset_id>/` (one folder per dataset, so runs cannot overwrite each other) and demo output to `outputs/demo/`; `semantic_groups.json` is an envelope `{schema_version, run, groups}` instead of a bare list so it carries its own provenance; `PARSERS` is now a list of `(name, function)` pairs.
 
 Note: `parsers.py` still imports `extract_log_fields` from your existing `src/preprocessing/log_preprocessor.py`, which is not part of this add-on. `tests/conftest.py` installs a minimal stand-in only if that module cannot be imported, so the add-on's tests also run standalone; with your real module present it is never used.
+
+## Review 1 additions
+
+- **Bug fix:** a JSON log with a non-string field (for example `"msg": 123` or a numeric epoch `ts`) used to crash normalization; all JSON fields are now coerced to text, and a normalization error on any single event is recorded in `metadata.normalize_error` instead of stopping the run.
+- **Timestamps:** epoch seconds/milliseconds are understood; `metadata.timestamp_unparseable` distinguishes an invalid timestamp from a missing one; the report counts missing, unparseable and assumed-year timestamps separately.
+- **Contract:** `LOGEVENT_SCHEMA_VERSION = "1.0"`, `validate_event`, generated `docs/logevent.schema.json`, checked on every run and in tests.
+- **Reproducibility:** `--config` JSON files (`configs/loghub_hdfs_2k.json`), resolved config + package versions recorded in the report, determinism tests.
+- **Evaluation:** purity, homogeneity, completeness and a mixed-cluster listing added; every evaluation states that it measures grouping, not RCA.
+- **Review material:** `scripts/review1_report.py` generates `docs/review1_report.md`; `docs/review1_checklist.md` maps each Review 1 item to its evidence.
+- **Tests:** `tests/test_robustness.py`, `tests/test_reproducibility.py`, `tests/test_contract.py`.

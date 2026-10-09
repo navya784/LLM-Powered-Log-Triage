@@ -47,6 +47,26 @@ _PROCESS_KEYS = ("process", "process_name", "proc", "program")
 _PID_KEYS = ("pid", "process_id")
 
 
+def _as_text(value) -> Optional[str]:
+    """JSON values can be numbers, lists, ...; the schema's text fields are
+    always str (or None)."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def _first_present(obj: dict, keys: tuple):
+    for k in keys:
+        v = obj.get(k)
+        if v not in (None, ""):
+            return v
+    return None
+
+
 def _first(d: dict, keys: tuple) -> Optional[str]:
     """First non-empty value among `keys` (case-insensitive), as a string."""
     lowered = {str(k).lower(): v for k, v in d.items()}
@@ -155,17 +175,18 @@ def _try_parse_json(line: str) -> Optional[dict]:
     if not isinstance(obj, dict):
         return None
     extra = {k: v for k, v in obj.items() if str(k).lower() not in _JSON_CONSUMED}
+    message = _as_text(_first_present(obj, ("msg", "message")))
     return {
-        "ts": obj.get("timestamp") or obj.get("time") or obj.get("ts"),
-        "host": obj.get("host") or obj.get("hostname"),
+        "ts": _as_text(_first_present(obj, ("timestamp", "time", "ts"))),
+        "host": _as_text(_first_present(obj, ("host", "hostname"))),
         "severity": str(obj.get("level") or obj.get("severity") or "").upper(),
-        "service": obj.get("service") or obj.get("app"),
+        "service": _as_text(_first_present(obj, ("service", "app"))),
         "process": _first(obj, _PROCESS_KEYS),
         "pid": _first(obj, _PID_KEYS),
         "request_id": _first(obj, _REQUEST_ID_KEYS),
         "trace_id": _first(obj, _TRACE_ID_KEYS),
         "exception": _first(obj, _EXCEPTION_KEYS),
-        "message": obj.get("msg") or obj.get("message") or json.dumps(obj),
+        "message": message if message is not None else json.dumps(obj, ensure_ascii=False),
         "log_format": LogFormat.JSON_LOG.value,
         "metadata": {"extra_fields": extra} if extra else {},
     }

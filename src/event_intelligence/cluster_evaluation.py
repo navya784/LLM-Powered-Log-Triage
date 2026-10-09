@@ -61,17 +61,53 @@ def internal_metrics(embeddings: np.ndarray, labels: np.ndarray) -> dict:
     return out
 
 
+def purity(labels: np.ndarray, truth: Sequence) -> float:
+    """Share of events whose cluster's majority ground-truth class is their
+    own class. Noise (-1) is treated as one group. Note: purity rises
+    trivially with the number of clusters, so read it next to ARI/NMI."""
+    labels = np.asarray(labels)
+    if len(labels) == 0:
+        return 0.0
+    correct = 0
+    for cluster in np.unique(labels):
+        members = [truth[i] for i in np.flatnonzero(labels == cluster)]
+        correct += max(members.count(c) for c in set(members))
+    return correct / len(labels)
+
+
+def mixed_clusters(labels: np.ndarray, truth: Sequence, top: int = 5) -> list[dict]:
+    """Clusters that contain more than one ground-truth class (largest
+    first): where the grouping disagrees with the labels."""
+    labels = np.asarray(labels)
+    out = []
+    for cluster in np.unique(labels):
+        members = [truth[i] for i in np.flatnonzero(labels == cluster)]
+        counts: dict = {}
+        for c in members:
+            counts[c] = counts.get(c, 0) + 1
+        if len(counts) > 1:
+            out.append({"cluster_id": int(cluster), "size": len(members),
+                        "truth_classes": dict(sorted(counts.items(), key=lambda kv: -kv[1]))})
+    return sorted(out, key=lambda d: -d["size"])[:top]
+
+
 def external_metrics(labels: np.ndarray, truth: Sequence) -> dict:
-    from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
+    from sklearn.metrics import (
+        adjusted_rand_score, completeness_score, homogeneity_score, normalized_mutual_info_score,
+    )
 
     labels = np.asarray(labels)
     if len(labels) != len(truth):
         raise ValueError(f"labels ({len(labels)}) and ground truth ({len(truth)}) differ in length.")
     if len(labels) == 0:
-        return {"ari": None, "nmi": None, "n_ground_truth_classes": 0}
+        return {"ari": None, "nmi": None, "purity": None, "homogeneity": None,
+                "completeness": None, "n_ground_truth_classes": 0}
     return {
         "ari": round(float(adjusted_rand_score(truth, labels)), 6),
         "nmi": round(float(normalized_mutual_info_score(truth, labels)), 6),
+        "purity": round(purity(labels, truth), 6),
+        "homogeneity": round(float(homogeneity_score(truth, labels)), 6),
+        "completeness": round(float(completeness_score(truth, labels)), 6),
         "n_ground_truth_classes": len(set(truth)),
         "noise_treated_as": "one extra group",
     }
@@ -81,6 +117,8 @@ def evaluate_clustering(
     embeddings: np.ndarray, labels: np.ndarray, ground_truth: Optional[Sequence] = None
 ) -> dict:
     result = {
+        "scope_note": ("Measures how well events are grouped by log meaning. It is not a measure of "
+                       "root-cause-analysis ability and must not be reported as one."),
         "size_distribution": cluster_size_distribution(labels),
         "internal": internal_metrics(embeddings, labels),
         "external": None,

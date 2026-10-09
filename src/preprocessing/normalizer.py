@@ -37,6 +37,8 @@ _EMBEDDED_PREFIX_RE = re.compile(r"^[\w\-.]+\[\d+\]:\s*")
 
 # Timestamps that carry no year ("Sep 20 08:01:03"): the year is assumed.
 _YEARLESS_RE = re.compile(r"^[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}$")
+# Unix epoch: 10 digits = seconds, 13 digits = milliseconds (optionally with a fraction).
+_EPOCH_RE = re.compile(r"^(\d{10}|\d{13})(\.\d+)?$")
 # LogHub HDFS compact form: "yymmdd HHMMSS" (e.g. "081109 203615").
 _COMPACT_YMD_HMS_RE = re.compile(r"^(\d{2})(\d{2})(\d{2})\s+(\d{2})(\d{2})(\d{2})$")
 
@@ -63,6 +65,16 @@ def normalize_timestamp(ts_raw: Optional[str], reference_year: int = 2026) -> Op
         except ValueError:
             return None
 
+    epoch = _EPOCH_RE.match(ts_raw)
+    if epoch:
+        value = float(ts_raw)
+        if len(epoch.group(1)) == 13:
+            value /= 1000.0
+        try:
+            return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
+
     candidate = ts_raw
     m = re.match(r"^(\d{1,2}/\w{3}/\d{4}):(\d{2}:\d{2}:\d{2}\s*[+-]\d{4})$", ts_raw)
     if m:
@@ -73,7 +85,7 @@ def normalize_timestamp(ts_raw: Optional[str], reference_year: int = 2026) -> Op
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc).isoformat()
-    except (ValueError, OverflowError):
+    except (ValueError, OverflowError, TypeError):
         return None
 
 
@@ -116,6 +128,9 @@ def normalize_event(event: LogEvent) -> LogEvent:
     """Fills the normalized fields. `raw_message`, `message`, `timestamp_raw`
     and `severity_raw` are never modified."""
     event.timestamp_iso = normalize_timestamp(event.timestamp_raw)
+    if event.timestamp_raw and event.timestamp_iso is None:
+        # a timestamp was present but could not be interpreted (vs. absent)
+        event.metadata["timestamp_unparseable"] = True
     if timestamp_year_is_assumed(event.timestamp_raw):
         event.metadata["timestamp_year_assumed"] = True
     if event.severity_raw is None and event.severity not in (None, Severity.UNKNOWN.value):
@@ -129,4 +144,16 @@ def normalize_event(event: LogEvent) -> LogEvent:
 
 
 def normalize_events(events: list[LogEvent]) -> list[LogEvent]:
-    return [normalize_event(e) for e in events]
+    """Normalizes every event. One malformed event must not abort the run:
+    if normalization raises, the event is kept, its `normalized_message`
+    falls back to the parsed message, and the error is recorded in
+    `metadata["normalize_error"]` (counted in the pipeline report)."""
+    for e in events:
+        try:
+            normalize_event(e)
+        except Exception as exc:  # noqa: BLE001
+            e.metadata["normalize_error"] = f"{type(exc).__name__}: {exc}"
+            if e.normalized_message is None:
+                e.normalized_message = e.message if isinstance(e.message, str) else str(e.message)
+            e.severity = e.severity if e.severity else Severity.UNKNOWN.value
+    return events

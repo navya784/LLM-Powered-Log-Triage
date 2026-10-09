@@ -62,3 +62,29 @@ def test_evaluate_clustering_bundles_everything():
     with_truth = evaluate_clustering(x, y, ground_truth=list(y))
     assert with_truth["external"]["ari"] == 1.0
     assert with_truth["size_distribution"]["n_clusters"] == 2
+
+
+def test_purity_homogeneity_completeness():
+    from src.event_intelligence.cluster_evaluation import purity
+
+    truth = ["a"] * 5 + ["b"] * 5
+    perfect = external_metrics(np.array([0] * 5 + [1] * 5), truth)
+    assert perfect["purity"] == 1.0 and perfect["homogeneity"] == 1.0 and perfect["completeness"] == 1.0
+    assert purity(np.zeros(10, dtype=int), truth) == 0.5          # one cluster holding two classes
+    over_split = external_metrics(np.arange(10), truth)            # every event its own cluster
+    assert over_split["purity"] == 1.0 and over_split["homogeneity"] == 1.0 and over_split["completeness"] < 1.0
+
+
+def test_mixed_clusters_lists_where_grouping_disagrees_with_labels():
+    from src.event_intelligence.cluster_evaluation import mixed_clusters
+
+    labels = np.array([0, 0, 0, 0, 1, 1, 2])
+    truth = ["a", "a", "a", "b", "c", "c", "d"]
+    mixed = mixed_clusters(labels, truth)
+    assert mixed == [{"cluster_id": 0, "size": 4, "truth_classes": {"a": 3, "b": 1}}]
+
+
+def test_evaluation_states_its_scope():
+    x, y = _two_blobs()
+    note = evaluate_clustering(x, y)["scope_note"]
+    assert "not a measure of root-cause" in note

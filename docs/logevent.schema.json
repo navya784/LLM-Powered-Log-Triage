@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LogEvent",
+  "description": "Canonical log event, contract version 1.0. See docs/interface_contract.md for field semantics.",
+  "x-schema-version": "1.0",
+  "type": "object",
+  "properties": {
+    "event_id": {
+      "type": "string"
+    },
+    "source_file": {
+      "type": "string"
+    },
+    "line_number": {
+      "type": "integer"
+    },
+    "raw_message": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "normalized_message": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "dataset_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "template": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "timestamp_raw": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "timestamp_iso": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "host": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "service": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "process": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pid": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "DEBUG",
+        "INFO",
+        "WARN",
+        "ERROR",
+        "CRITICAL",
+        "UNKNOWN"
+      ]
+    },
+    "severity_raw": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "log_format": {
+      "type": "string",
+      "enum": [
+        "bracket",
+        "syslog",
+        "json_log",
+        "apache_access",
+        "key_value",
+        "hdfs",
+        "plain_text",
+        "unknown"
+      ]
+    },
+    "event_type": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "request_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "trace_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "exception": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "parser_name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "parse_confidence": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "entities": {
+      "type": "object"
+    },
+    "semantic_cluster": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "embedding_index": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "event_id",
+    "source_file",
+    "line_number",
+    "raw_message",
+    "message"
+  ],
+  "additionalProperties": false
+}

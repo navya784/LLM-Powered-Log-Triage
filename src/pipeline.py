@@ -44,7 +44,7 @@ from src.event_intelligence.event_extractor import extract_events, template_freq
 from src.preprocessing.datasets import DEMO_SYNTHETIC, DatasetMissingError, DatasetSpec, get_dataset
 from src.preprocessing.ingestion import find_dataset_files, ingest_files
 from src.preprocessing.normalizer import normalize_events
-from src.preprocessing.schema import LogEvent
+from src.preprocessing.schema import LOGEVENT_SCHEMA_VERSION, LogEvent, validate_event
 
 SCHEMA_VERSION = 1
 
@@ -57,6 +57,33 @@ class RunMode(str, Enum):
 # ---------------------------------------------------------------------------
 # Writers
 # ---------------------------------------------------------------------------
+
+def environment_info() -> dict:
+    """Versions that can change results; recorded so a run can be reproduced."""
+    import importlib
+    import platform
+
+    info = {"python": platform.python_version(), "platform": platform.platform()}
+    for pkg in ("numpy", "scikit-learn", "sentence-transformers", "hdbscan", "pyarrow", "python-dateutil"):
+        try:
+            from importlib import metadata
+            info[pkg] = metadata.version(pkg)
+        except Exception:  # noqa: BLE001 - not installed
+            info[pkg] = None
+    return info
+
+
+def load_config_file(path: Path) -> dict:
+    """Reads a run configuration (JSON). Keys are run_pipeline arguments."""
+    cfg = json.loads(Path(path).read_text(encoding="utf-8"))
+    allowed = {"dataset", "demo", "embedding_backend", "embedding_model", "representation",
+               "algorithm", "clustering_params", "seed"}
+    unknown = set(cfg) - allowed - {"description"}
+    if unknown:
+        raise ValueError(f"Unknown keys in config {path}: {sorted(unknown)}. Allowed: {sorted(allowed)}")
+    cfg.pop("description", None)
+    return cfg
+
 
 def _write_jsonl(events: list[LogEvent], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -157,6 +184,16 @@ def run_pipeline(
 
     report: dict = {
         "schema_version": SCHEMA_VERSION,
+        "logevent_schema_version": LOGEVENT_SCHEMA_VERSION,
+        "config": {
+            "dataset": spec.dataset_id, "demo": demo, "seed": seed,
+            "embedding_backend": embedding_backend or config.EMBEDDING_BACKEND,
+            "embedding_model": embedding_model or config.EMBEDDING_MODEL_NAME,
+            "representation": representation or config.EMBEDDING_REPRESENTATION,
+            "algorithm": algorithm or config.CLUSTERING_ALGORITHM,
+            "clustering_params": clustering_params or {},
+        },
+        "environment": environment_info(),
         "mode": mode.value,
         "dataset_id": spec.dataset_id,
         "dataset_name": spec.name,
@@ -184,7 +221,10 @@ def run_pipeline(
     events = normalize_events(events)
     report["stages"]["normalization"] = {
         "n_events": len(events),
-        "unresolved_timestamps": sum(1 for e in events if e.timestamp_iso is None),
+        "missing_timestamps": sum(1 for e in events if e.timestamp_raw is None),
+        "unparseable_timestamps": sum(1 for e in events if e.metadata.get("timestamp_unparseable")),
+        "timestamps_with_assumed_year": sum(1 for e in events if e.metadata.get("timestamp_year_assumed")),
+        "normalization_errors": sum(1 for e in events if "normalize_error" in e.metadata),
         "unresolved_severities": sum(1 for e in events if e.severity == "UNKNOWN"),
         "events_without_service": sum(1 for e in events if e.service is None),
         "service_attributed_by_dataset_config": sum(
@@ -234,6 +274,14 @@ def run_pipeline(
     )
     report["stages"]["semantic_clustering"] = {**cluster_result.params, "evaluation": evaluation}
 
+    problems = [p for e in events for p in validate_event(e, final=True)]
+    report["stages"]["schema_validation"] = {
+        "logevent_schema_version": LOGEVENT_SCHEMA_VERSION,
+        "events_checked": len(events), "violations": len(problems), "examples": problems[:5],
+    }
+    if problems:
+        raise RuntimeError(f"{len(problems)} LogEvent contract violation(s); first: {problems[0]}")
+
     report["total_runtime_seconds"] = round(time.time() - t0, 3)
     report["n_events_final"] = len(events)
 
@@ -244,6 +292,7 @@ def run_pipeline(
         report["parquet_written"] = _write_parquet(events, out_dir / names["events_parquet"])
         envelope = {
             "schema_version": SCHEMA_VERSION,
+            "logevent_schema_version": LOGEVENT_SCHEMA_VERSION,
             "run": {
                 "mode": mode.value, "dataset_id": spec.dataset_id, "is_synthetic": spec.is_synthetic,
                 "n_events": len(events),
@@ -304,16 +353,23 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--n-clusters", type=int, default=None, help="kmeans k")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--save-intermediate", action="store_true")
+    ap.add_argument("--config", type=Path, default=None,
+                    help="JSON run configuration (e.g. configs/loghub_hdfs_2k.json); explicit flags override it")
     args = ap.parse_args(argv)
 
     params = {k: v for k, v in {"distance_threshold": args.distance_threshold,
                                 "n_clusters": args.n_clusters}.items() if v is not None}
     try:
-        result = run_pipeline(
-            dataset=args.dataset, demo=args.demo, embedding_backend=args.embedding_backend,
-            representation=args.representation, algorithm=args.algorithm,
-            clustering_params=params, seed=args.seed, save_intermediate=args.save_intermediate,
-        )
+        cfg = load_config_file(args.config) if args.config else {}
+        if args.dataset or args.demo:               # explicit mode flags replace the file's choice
+            cfg.pop("dataset", None)
+            cfg.pop("demo", None)
+        overrides = {"dataset": args.dataset, "demo": args.demo or None,
+                     "embedding_backend": args.embedding_backend, "representation": args.representation,
+                     "algorithm": args.algorithm, "seed": args.seed}
+        cfg.update({k: v for k, v in overrides.items() if v is not None})
+        cfg["clustering_params"] = {**cfg.get("clustering_params", {}), **params}
+        result = run_pipeline(save_intermediate=args.save_intermediate, **cfg)
     except DatasetMissingError as exc:
         print(f"[pipeline] DATASET MISSING: {exc}", file=sys.stderr)
         return 2

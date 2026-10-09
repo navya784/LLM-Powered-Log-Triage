@@ -33,7 +33,7 @@ Place them in `data/raw/loghub/HDFS_2k/` (or run `python scripts/fetch_loghub.py
 
 ### Baseline numbers (for orientation, not a result)
 
-TF-IDF+SVD embeddings (the real sentence-transformers model was not available where this was run), seed 42, `tune` split, agglomerative @ 0.35:
+TF-IDF+SVD embeddings (the real sentence-transformers model was not available where this was run), seed 42, `tune` split, agglomerative @ 0.35. The full-dataset numbers, produced by `python scripts/review1_report.py`, are in `docs/review1_report.md`:
 
 | representation | clusters | ARI | NMI |
 |---|---|---|---|
@@ -48,7 +48,7 @@ The representation matters a lot on this data — which is why it is an experime
 1. **Not an RCA dataset.** The 2k sample has no anomaly or root-cause labels; ground truth here only supports evaluating *semantic grouping*. Block-level normal/anomaly labels exist for the full HDFS_v1 set (LogHub / Xu et al., SOSP'09) and are not integrated yet. No claim about RCA performance can be made from this dataset.
 2. **Easy for grouping.** 14 near-deterministic templates; with template embeddings ARI ≈ 1.0, so it cannot separate good methods from mediocre ones. Add a harder dataset before drawing conclusions.
 3. **Little structure for downstream work.** One system, one service (`hdfs`), no hostnames, no request/trace ids, only INFO/WARN. Dependency-graph, severity-scoring and cross-service correlation cannot be exercised on it.
-4. **Template masking leaves the minus sign of negative block ids** (`blk_-123` → `blk_-<NUM>`), so 14 true event types become 29 distinct templates. Clustering still merges them; a dedicated block-id mask would remove the artifact.
+4. **Template masking leaves the minus sign of negative block ids** (`blk_-123` → `blk_-<NUM>`), so 14 true event types become 29 distinct templates (12 of the 14 types split, almost entirely for this reason). Clustering still merges them; a dedicated block-id mask would remove the artifact.
 5. **Timestamps** have no timezone (UTC assumed) and no year in the raw form (2000 + yy).
 6. Small sample (2,000 lines; the full HDFS_v1 set has millions); how LogHub drew it is not documented here.
 

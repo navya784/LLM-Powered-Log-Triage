@@ -1,5 +1,7 @@
 # Interface contract: Member 1 → Member 2
 
+**Contract version: `1.0`** (`LOGEVENT_SCHEMA_VERSION` in `src/preprocessing/schema.py`). Additive changes bump the minor number; renamed/removed fields or changed meaning bump the major number. The machine-readable form is `docs/logevent.schema.json` (generated from the dataclass by `python scripts/export_schema.py`; a test fails if it drifts). Every pipeline run checks each event with `validate_event` and fails on any violation; the count is in `pipeline_report.json` under `schema_validation`.
+
 Member 1 (ingestion, normalization, event intelligence) hands Member 2 a set of
 files. **Member 2 never needs to re-read or re-parse raw logs.**
 
@@ -24,6 +26,8 @@ Semantic-group artifact   (semantic_groups.json)
 python -m src.pipeline --dataset loghub_hdfs_2k     # RESEARCH  -> data/processed/loghub_hdfs_2k/
 python -m src.pipeline --demo                       # DEMO      -> outputs/demo/   (synthetic; not a result)
 ```
+Reproducible runs: put every choice in a JSON file (see `configs/loghub_hdfs_2k.json`) and run `python -m src.pipeline --config configs/loghub_hdfs_2k.json`; explicit flags override the file. The report records the resolved `config`, the `seed` and an `environment` block (Python, numpy, scikit-learn, sentence-transformers, ... versions). Same config + data + environment gives byte-identical `events.jsonl`, `embeddings.npy` and `semantic_groups.json`.
+
 No `--dataset` and no `--demo` → the pipeline reports the dataset as missing (exit code 2). It never generates data on its own. Research runs also fail (exit 3) if the requested embedding model is unavailable; `--embedding-backend tfidf` is an explicit, recorded choice. Other switches: `--representation {message,template,hybrid}`, `--algorithm`, `--distance-threshold`, `--n-clusters`, `--seed`, `--save-intermediate`.
 
 Python: `from src.pipeline import run_pipeline` → `run_pipeline(dataset="loghub_hdfs_2k")` returns `{"events": [LogEvent], "embeddings": ndarray, "semantic_groups": [...], "report": {...}, "output_dir": Path}`.
@@ -85,7 +89,7 @@ Groups are ordered by size (largest first), the noise group (`cluster_id: -1`, H
 | `message` | Message body as extracted by the parser (unmodified by normalization). |
 | `normalized_message` | Message after normalization (e.g. embedded `service[pid]:` prefix removed). Set for every event that went through the pipeline. |
 | `template` | `normalized_message` with IPs, numbers, paths, … masked. |
-| `timestamp_raw` / `timestamp_iso` | Raw string as parsed / ISO-8601 UTC, or `null` if absent or unparseable. **Timestamps without a timezone are assumed UTC**, and syslog-style stamps without a year get an assumed year; the latter is flagged with `metadata.timestamp_year_assumed = true`. |
+| `timestamp_raw` / `timestamp_iso` | Raw string as parsed / ISO-8601 UTC, or `null` if absent or unparseable (`metadata.timestamp_unparseable = true` when a raw timestamp existed but could not be read, so "missing" and "invalid" can be told apart; epoch seconds/milliseconds are understood). **Timestamps without a timezone are assumed UTC**, and syslog-style stamps without a year get an assumed year; the latter is flagged with `metadata.timestamp_year_assumed = true`. |
 | `severity` / `severity_raw` | Canonical `DEBUG, INFO, WARN, ERROR, CRITICAL` or `UNKNOWN`; aliases (`WARNING, CRIT, FATAL, ERR, …`) are mapped before validation. `severity_raw` is the token in the line. Apache-style access lines have no severity token: it is derived from the HTTP status (`metadata.severity_source`). |
 | `host` | Host/IP if the line carries one, else `null`. |
 | `service` | Logical service. From the line if it has one (`metadata.service_source = "log_line"` or `"syslog_tag"`), otherwise from **dataset configuration** (`"dataset_config"`), otherwise `null`. A `null` service is legitimate (e.g. a raw access log with no mapping) — do not assume one. |
@@ -93,11 +97,22 @@ Groups are ordered by size (largest first), the noise group (`cluster_id: -1`, H
 | `request_id`, `trace_id`, `exception` | Read from JSON / key-value fields when present, else `null`. |
 | `parser_name`, `log_format` | Which parser handled the line (`bracket, json, syslog, hdfs, apache, key_value, plain_text`). |
 | `parse_confidence` | Structural completeness in [0, 1] (share of timestamp / severity / message extracted); `0.0` for plain-text fallback. A diagnostic heuristic, **not a probability**. |
-| `metadata` | Free-form provenance. Always has `parse_status` (`parsed`, `fallback_plain_text` or `failed`). May hold `service_source`, `component`, `thread_id`, `http_status`, `extra_fields`, `parse_error`, … |
+| `metadata` | Free-form provenance. Always has `parse_status` (`parsed`, `fallback_plain_text` or `failed`). May hold `service_source`, `component`, `thread_id`, `http_status`, `extra_fields`, `parse_error`, `normalize_error`, `timestamp_unparseable`, `timestamp_year_assumed`, … |
 | `entities` | Extracted `ips`, `status_code`, `latency_ms`, `error_code` when present (from `normalized_message`). |
 | `event_type` | **Rule-based auxiliary label** (keyword rules; `other` if none match). A cheap extra feature, not ground truth and not semantic understanding. It never changes `message` / `template`. |
 | `semantic_cluster` | Cluster id from the run (`-1` = noise). Meaningful only together with the run's `clustering` configuration. |
 | `embedding_index` | Row of this event in `embeddings.npy`. |
+
+## Failure behaviour (what Member 2 can rely on)
+
+- Every non-blank input line becomes exactly one event: `parsed + fallback_plain_text + failed == lines_read`. Nothing is dropped.
+- A line no parser recognises is kept as `plain_text` (`parse_confidence 0.0`, severity `UNKNOWN`, no timestamp). A parser that raises is recorded as `parse_status: failed` with `metadata.parse_error`, and the line is kept as plain text.
+- A normalization error is recorded in `metadata.normalize_error`; `normalized_message` falls back to `message`.
+- Missing fields are `null`, never guessed. Epoch, offset and `Z` timestamps are converted to UTC; timestamps with no timezone are assumed UTC.
+
+## What the evaluation does and does not mean
+
+`pipeline_report.json` → `semantic_clustering.evaluation.external` (ARI, NMI, purity, homogeneity, completeness) compares the groups with a dataset's template labels. It measures **grouping quality**. It is **not** a measure of root-cause identification, and good grouping does not show that the system can find root causes. No result from this stage may be reported as an RCA result.
 
 ## Provenance you should carry forward
 

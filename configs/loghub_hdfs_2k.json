@@ -1,0 +1,10 @@
+{
+  "description": "Review 1 configuration: LogHub HDFS_2k, template embeddings, agglomerative clustering.",
+  "dataset": "loghub_hdfs_2k",
+  "embedding_backend": "sentence-transformers",
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "representation": "template",
+  "algorithm": "agglomerative",
+  "clustering_params": {"distance_threshold": 0.35},
+  "seed": 42
+}
